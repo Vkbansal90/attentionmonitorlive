@@ -327,11 +327,39 @@ class EnhancedAnalyzer:
                 # Basic face metrics
                 metrics['face'] = self._analyze_face_metrics(frame, face_landmarks)
                 
+                # Emotion analysis
+                current_time = time.time()
+                if current_time - self.last_emotion_time >= self.emotion_interval:
+                    # FER analysis
+                    fer_result = self.fer_detector.detect_emotions(frame)
+                    if fer_result:
+                        emotions = fer_result[0]['emotions']
+                        
+                        # DeepFace analysis for verification
+                        try:
+                            deepface_result = DeepFace.analyze(frame, actions=['emotion'], enforce_detection=False)
+                            if isinstance(deepface_result, list):
+                                deepface_result = deepface_result[0]
+                            
+                            # Combine results with weights
+                            combined_emotions = {}
+                            for emotion in emotions:
+                                fer_score = emotions[emotion]
+                                deepface_score = deepface_result['emotion'].get(emotion, 0) / 100  # DeepFace returns percentages
+                                combined_emotions[emotion] = 0.6 * fer_score + 0.4 * deepface_score
+                            
+                            metrics['emotions'] = combined_emotions
+                            self.last_emotion_time = current_time
+                        except:
+                            # If DeepFace fails, use FER results only
+                            metrics['emotions'] = emotions
+                            self.last_emotion_time = current_time
+                
                 # Gaze analysis
-                metrics['gaze'] = self._analyze_gaze(face_landmarks)
+                metrics['gaze'] = self._analyze_gaze(frame, face_landmarks)
                 
                 # Pose analysis
-                metrics['pose'] = self._analyze_pose(rgb_frame)
+                metrics['pose'] = self._analyze_pose(frame)
                 
                 # Hand analysis
                 metrics['hands'] = self._analyze_hands(frame, face_landmarks)
@@ -383,74 +411,69 @@ class EnhancedAnalyzer:
         except:
             return {'ear': 1.0, 'mar': 0.0, 'pitch': 0.0, 'yaw': 0.0}
     
-    def _analyze_gaze(self, face_landmarks) -> Dict[str, float]:
+    def _analyze_gaze(self, frame, face_landmarks) -> Dict[str, float]:
         """Analyze gaze direction"""
         try:
-            # Get iris landmarks
-            left_iris = np.mean([[face_landmarks.landmark[p].x, face_landmarks.landmark[p].y] 
-                               for p in range(468, 472)], axis=0)
-            right_iris = np.mean([[face_landmarks.landmark[p].x, face_landmarks.landmark[p].y] 
-                                for p in range(473, 477)], axis=0)
-            
-            # Calculate eye centers
-            left_eye_center = np.mean([[face_landmarks.landmark[p].x, face_landmarks.landmark[p].y] 
-                                     for p in [33, 133]], axis=0)
-            right_eye_center = np.mean([[face_landmarks.landmark[p].x, face_landmarks.landmark[p].y] 
-                                      for p in [362, 263]], axis=0)
-            
-            # Calculate gaze deviation
-            left_deviation = np.linalg.norm(left_iris - left_eye_center)
-            right_deviation = np.linalg.norm(right_iris - right_eye_center)
-            avg_deviation = (left_deviation + right_deviation) / 2
-            
-            gaze_score = max(0.0, 1.0 - (avg_deviation / self.thresholds['GAZE_DEVIATION_THRESH']))
-            self.gaze_scores.append(gaze_score)
-            
-            return {'gaze_score': gaze_score}
-        except:
-            return {'gaze_score': 1.0}
+            results = self.face_mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if results.multi_face_landmarks:
+                landmarks = results.multi_face_landmarks[0].landmark
+                
+                # Get iris landmarks
+                left_iris = np.mean([[landmarks[p].x, landmarks[p].y] 
+                                   for p in range(468, 472)], axis=0)
+                right_iris = np.mean([[landmarks[p].x, landmarks[p].y] 
+                                    for p in range(473, 477)], axis=0)
+                
+                # Calculate gaze deviation from center
+                left_eye_center = np.mean([[landmarks[p].x, landmarks[p].y] 
+                                         for p in range(362, 386)], axis=0)
+                right_eye_center = np.mean([[landmarks[p].x, landmarks[p].y] 
+                                          for p in range(33, 157)], axis=0)
+                
+                gaze_deviation = np.mean([
+                    np.linalg.norm(left_iris - left_eye_center),
+                    np.linalg.norm(right_iris - right_eye_center)
+                ])
+                
+                return {
+                    'gaze_focus': 1.0 - min(1.0, gaze_deviation * 10)
+                }
+                
+        except Exception as e:
+            print(f"Error in gaze analysis: {str(e)}")
+        
+        return {'gaze_focus': 1.0}
     
-    def _analyze_pose(self, rgb_frame: np.ndarray) -> Dict[str, float]:
+    def _analyze_pose(self, frame) -> Dict[str, float]:
         """Analyze body posture"""
         try:
-            results = self.pose.process(rgb_frame)
+            results = self.pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             if results.pose_landmarks:
-                # Get key points
+                # Extract key points for posture analysis
                 landmarks = results.pose_landmarks.landmark
                 
                 # Calculate shoulder alignment
                 left_shoulder = np.array([landmarks[11].x, landmarks[11].y])
                 right_shoulder = np.array([landmarks[12].x, landmarks[12].y])
-                shoulder_angle = np.abs(np.degrees(np.arctan2(
-                    right_shoulder[1] - left_shoulder[1],
-                    right_shoulder[0] - left_shoulder[0]
-                )))
+                shoulder_angle = np.abs(np.arctan2(right_shoulder[1] - left_shoulder[1],
+                                                 right_shoulder[0] - left_shoulder[0]))
                 
                 # Calculate spine alignment
                 nose = np.array([landmarks[0].x, landmarks[0].y])
-                mid_hip = np.array([
-                    (landmarks[23].x + landmarks[24].x) / 2,
-                    (landmarks[23].y + landmarks[24].y) / 2
-                ])
-                spine_angle = np.abs(np.degrees(np.arctan2(
-                    mid_hip[1] - nose[1],
-                    mid_hip[0] - nose[0]
-                )))
-                
-                # Calculate posture score
-                posture_score = 1.0 - min(1.0, (shoulder_angle + spine_angle) / 
-                                        (2 * self.thresholds['POSTURE_ANGLE_THRESH']))
-                self.posture_scores.append(posture_score)
+                mid_hip = np.array([(landmarks[23].x + landmarks[24].x)/2,
+                                  (landmarks[23].y + landmarks[24].y)/2])
+                spine_angle = np.abs(np.arctan2(mid_hip[1] - nose[1],
+                                              mid_hip[0] - nose[0]))
                 
                 return {
-                    'posture_score': posture_score,
-                    'shoulder_angle': shoulder_angle,
-                    'spine_angle': spine_angle
+                    'shoulder_alignment': 1.0 - min(1.0, shoulder_angle / np.pi),
+                    'spine_alignment': 1.0 - min(1.0, spine_angle / (np.pi/2))
                 }
-        except:
-            pass
+                
+        except Exception as e:
+            print(f"Error in pose analysis: {str(e)}")
         
-        return {'posture_score': 1.0, 'shoulder_angle': 0.0, 'spine_angle': 0.0}
+        return {'shoulder_alignment': 1.0, 'spine_alignment': 1.0}
     
     def _analyze_hands(self, frame: np.ndarray, face_landmarks) -> Dict[str, float]:
         """Analyze hand position relative to face"""
@@ -506,10 +529,10 @@ class EnhancedAnalyzer:
                     face_score *= 0.9
             
             # Gaze score
-            gaze_score = metrics.get('gaze', {}).get('gaze_score', 1.0)
+            gaze_score = metrics.get('gaze', {}).get('gaze_focus', 1.0)
             
             # Pose score
-            pose_score = metrics.get('pose', {}).get('posture_score', 1.0)
+            pose_score = metrics.get('pose', {}).get('shoulder_alignment', 1.0)
             
             # Hand score
             hand_score = metrics.get('hands', {}).get('hand_score', 1.0)
@@ -595,14 +618,34 @@ class EnhancedAnalyzer:
                 f"Attention: {attention_score:.2f}",
                 f"EAR: {metrics['face']['ear']:.2f}",
                 f"MAR: {metrics['face']['mar']:.2f}",
-                f"Gaze: {metrics['gaze']['gaze_score']:.2f}",
-                f"Posture: {metrics['pose']['posture_score']:.2f}",
+                f"Gaze: {metrics['gaze']['gaze_focus']:.2f}",
+                f"Posture: {metrics['pose']['shoulder_alignment']:.2f}",
                 f"Hand Dist: {metrics['hands']['min_distance']:.0f}px"
             ]
             
+            # Add emotion information if available
+            if 'emotions' in metrics:
+                # Get the dominant emotion
+                dominant_emotion = max(metrics['emotions'].items(), key=lambda x: x[1])
+                metrics_text.append(f"Emotion: {dominant_emotion[0]} ({dominant_emotion[1]:.2f})")
+                
+                # Add top 3 emotions with their scores
+                sorted_emotions = sorted(metrics['emotions'].items(), key=lambda x: x[1], reverse=True)[:3]
+                for emotion, score in sorted_emotions:
+                    if score > 0.1:  # Only show emotions with significant scores
+                        metrics_text.append(f"  {emotion}: {score:.2f}")
+            
             for i, text in enumerate(metrics_text):
                 y = 30 + (i * 30)
-                color = (0, 255, 0) if i == 0 else (255, 255, 0)
+                # Use different colors for different types of information
+                if i == 0:  # Attention score
+                    color = (0, 255, 0)
+                elif text.startswith("Emotion:"):  # Main emotion
+                    color = (255, 165, 0)  # Orange
+                elif text.startswith("  "):  # Detailed emotions
+                    color = (255, 192, 203)  # Pink
+                else:  # Other metrics
+                    color = (255, 255, 0)
                 cv2.putText(frame, text, (10, y),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             
@@ -616,10 +659,19 @@ class EnhancedAnalyzer:
                 warnings.append("Head Tilted!")
             if metrics['hands']['min_distance'] < self.thresholds['HAND_DISTANCE_THRESH']:
                 warnings.append("Hand Near Face!")
-            if metrics['gaze']['gaze_score'] < 0.5:
+            if metrics['gaze']['gaze_focus'] < 0.5:
                 warnings.append("Look at Screen!")
-            if metrics['pose']['posture_score'] < 0.5:
+            if metrics['pose']['shoulder_alignment'] < 0.5:
                 warnings.append("Fix Posture!")
+            
+            # Add emotion-based warnings
+            if 'emotions' in metrics:
+                if metrics['emotions'].get('angry', 0) > 0.5:
+                    warnings.append("High Anger Detected!")
+                if metrics['emotions'].get('sad', 0) > 0.5:
+                    warnings.append("Sadness Detected!")
+                if metrics['emotions'].get('disgust', 0) > 0.5:
+                    warnings.append("Disgust Detected!")
             
             for i, warning in enumerate(warnings):
                 y = h - 30 - (i * 30)

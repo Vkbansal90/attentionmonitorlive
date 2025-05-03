@@ -26,6 +26,7 @@ import librosa
 import sounddevice as sd
 import sqlite3
 from datetime import datetime
+import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -116,7 +117,7 @@ def process_frame(frame):
     face_score, processed_frame = st.session_state.face_analyzer.analyze_attention(frame)
     posture_score, processed_frame = st.session_state.posture_detector.detect_posture(processed_frame)
     audio_score = st.session_state.audio_analyzer.analyze_attention()
-    total_score = (0.4 * face_score) + (0.3 * posture_score) + (0.3 * audio_score)
+    total_score = (0.6 * face_score) + (0.2 * posture_score) + (0.2* audio_score)
     return face_score, posture_score, audio_score, total_score, processed_frame
 
 def update_ui(video_placeholder, metrics_placeholder, chart_placeholder, frame_data):
@@ -202,13 +203,16 @@ def main():
     st.sidebar.title("Controls")
     
     # Add force quit button in sidebar with warning color
-    if st.sidebar.button("⚠️ Force Quit", help="Use this to forcefully stop the application", 
+    if st.sidebar.button("⚠️ Quit", help="Use this to forcefully stop the application", 
                         type="primary", key="force_quit"):
         force_quit()
     
     start_stop = st.sidebar.button(
         "Stop Monitoring" if st.session_state.running else "Start Monitoring"
     )
+    
+    # Add button to show session report
+    show_report = st.sidebar.button("Show Session Report")
     
     # Main content layout
     col1, col2 = st.columns([2, 1])
@@ -280,6 +284,39 @@ def main():
         cleanup_resources()
         if conn:
             conn.close()
+        # --- Attention Report Feature ---
+        if len(st.session_state.attention_scores) > 0:
+            scores = st.session_state.attention_scores
+            avg_score = sum(scores) / len(scores)
+            min_score = min(scores)
+            max_score = max(scores)
+            duration_sec = len(scores) * 0.033  # approx frame rate
+            duration_str = str(datetime.timedelta(seconds=int(duration_sec)))
+            st.subheader('Session Attention Report')
+            st.markdown(f"""
+            **Duration:** {duration_str}  
+            **Average Attention:** {avg_score:.2f}  
+            **Max Attention:** {max_score:.2f}  
+            **Min Attention:** {min_score:.2f}  
+            **Total Frames:** {len(scores)}
+            """)
+
+    # Show session report if button pressed
+    if show_report and len(st.session_state.attention_scores) > 0:
+        scores = st.session_state.attention_scores
+        avg_score = sum(scores) / len(scores)
+        min_score = min(scores)
+        max_score = max(scores)
+        duration_sec = len(scores) * 0.033  # approx frame rate
+        duration_str = str(datetime.timedelta(seconds=int(duration_sec)))
+        st.subheader('Session Attention Report')
+        st.markdown(f"""
+        **Duration:** {duration_str}  
+        **Average Attention:** {avg_score:.2f}  
+        **Max Attention:** {max_score:.2f}  
+        **Min Attention:** {min_score:.2f}  
+        **Total Frames:** {len(scores)}
+        """)
 
 if __name__ == "__main__":
     main()
