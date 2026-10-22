@@ -46,7 +46,7 @@ main {
 .stage { grid-column: 1; }
 .panel { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 16px; }
 .trend { grid-column: 1; }
-.history, .how { grid-column: 1 / -1; }
+.history { grid-column: 1 / -1; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -155,9 +155,6 @@ td.num { font-variant-numeric: tabular-nums; }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover td { background: var(--surface-2); }
 
-.pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
-.pipeline h4 { font-size: 15px; margin-bottom: 6px; color: var(--accent); }
-.pipeline p { margin: 0; color: var(--muted); font-size: 14px; }
 
 footer { text-align: center; color: var(--muted); font-size: 13px; padding: 10px 16px 30px; }
 
@@ -191,17 +188,13 @@ dialog h3 { margin-top: 22px; }
 .log time { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .report-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
 
-@media (max-width: 1100px) {
-  .pipeline { grid-template-columns: 1fr 1fr; }
-}
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; padding: 16px; }
-  .stage, .panel, .trend, .history, .how { grid-column: 1; grid-row: auto; }
+  main { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .stage, .panel, .trend, .history { grid-column: 1; grid-row: auto; }
   .top { padding: 14px 16px; }
   .report-cols { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
-  .pipeline { grid-template-columns: 1fr; }
   .video-wrap { aspect-ratio: 3 / 4; }
   .placeholder h2 { font-size: 19px; }
   .score-num { font-size: 36px; }

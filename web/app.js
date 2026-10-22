@@ -10,8 +10,10 @@ const CFG = {
   EAR_THRESH: 0.2,          // eye aspect ratio below this = eyes closed
   MAR_THRESH: 0.5,          // mouth aspect ratio above this = mouth wide open
   ROLL_THRESH: 30,          // head tilt (degrees), same as HEAD_POSE_THRESH
-  YAW_THRESH: 25,           // looking left/right (degrees from calibrated baseline)
-  PITCH_THRESH: 20,         // looking up/down (degrees from calibrated baseline)
+  YAW_THRESH: 30,           // looking left/right (degrees from calibrated baseline)
+  PITCH_THRESH: 25,         // looking up/down (degrees from calibrated baseline)
+  LOOK_AWAY_GRACE_MS: 1500, // short glances (e.g. at notes) are not penalised
+  YAWN_FATIGUE_MS: 30000,   // a yawn keeps lowering the face score for 30 s
   HAND_DIST_THRESH: 0.23,   // 150 px at 640 px width, as a fraction of frame width
   NECK_THRESH: 20,
   SHOULDER_THRESH: 15,
@@ -48,7 +50,7 @@ const SIGNALS = {
   noFace:     { label: 'Away from camera', minMs: 2000 },
   lookAway:   { label: 'Looking away', minMs: 2000 },
   eyesClosed: { label: 'Eyes closed', minMs: 1500, event: 'Drowsy (eyes closed)' },
-  yawn:       { label: 'Yawning', minMs: 1200 },
+  yawn:       { label: 'Yawning', minMs: 1000 },
   headTilt:   { label: 'Head tilted', minMs: 3000 },
   handFace:   { label: 'Hand on face', minMs: 2500 },
   slouch:     { label: 'Slouching', minMs: 4000 },
@@ -152,7 +154,7 @@ function newSession() {
     faceHist: [], stateMs: { focused: 0, partial: 0, distracted: 0 },
     calib: { done: false, n: 0, yaw: 0, pitch: 0, ear: 0, neck: [], slouch: [] },
     eye: { closed: false, since: 0, blinks: [], perclos: [] },
-    yawns: 0, blinkTotal: 0, handPrev: null, handMoves: [],
+    yawns: 0, fatigueUntil: 0, lookSince: null, blinkTotal: 0, handPrev: null, handMoves: [],
     phoneSeenAt: -1e9, phoneBoxes: [], audioLevel: 0,
     lowSince: null, lastAlert: -1e9, streakStart: null, bestStreak: 0,
     last: null, fpsFrames: 0, fpsT: performance.now(),
@@ -382,9 +384,11 @@ function analyzeFace(res, handRes, w, h, now) {
   const earThresh = c.done ? Math.min(CFG.EAR_THRESH, (c.ear / c.n) * 0.65) : CFG.EAR_THRESH;
 
   const eyesClosed = blink > 0.5 || ear < earThresh;
-  const yawn = (bs.jawOpen ?? 0) > 0.55 && mar > CFG.MAR_THRESH;
+  const yawn = (bs.jawOpen ?? 0) > 0.45 && mar > 0.45;
   const headTilt = Math.abs(roll) > CFG.ROLL_THRESH;
   const lookAway = Math.abs(relYaw) > CFG.YAW_THRESH || Math.abs(relPitch) > CFG.PITCH_THRESH;
+  S.lookSince = lookAway ? (S.lookSince ?? now) : null;
+  const lookAwaySustained = lookAway && now - S.lookSince >= CFG.LOOK_AWAY_GRACE_MS;
 
   trackBlink(eyesClosed, now);
 
@@ -403,9 +407,10 @@ function analyzeFace(res, handRes, w, h, now) {
   let score = 1;
   if (eyesClosed) score *= 0.7;
   if (now - S.eye.since > 1500 && S.eye.closed) score *= 0.5;
-  if (yawn) score *= 0.8;
+  if (yawn) score *= 0.55;
+  if (now < S.fatigueUntil) score *= 0.85;   // lingering fatigue after a yawn
   if (headTilt) score *= 0.9;
-  if (lookAway) score *= 0.6;
+  if (lookAwaySustained) score *= 0.75;
   if (handNear) score *= Math.max(0.5, handDist / CFG.HAND_DIST_THRESH);
   if (S.faceHist.length) score = 0.7 * score + 0.3 * mean(S.faceHist);
   score = clamp01(score);
@@ -498,7 +503,7 @@ function trackEvents(flags, now) {
       if (!S.logged[key] && now - S.active[key] >= SIGNALS[key].minMs) {
         S.logged[key] = true;
         S.events.push({ t: (S.active[key] - S.t0) / 1000, key, label: SIGNALS[key].event ?? SIGNALS[key].label });
-        if (key === 'yawn') S.yawns++;
+        if (key === 'yawn') { S.yawns++; S.fatigueUntil = now + CFG.YAWN_FATIGUE_MS; }
       }
     } else {
       delete S.active[key];

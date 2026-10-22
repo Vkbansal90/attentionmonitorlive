@@ -28,7 +28,7 @@ The demo runs entirely in the visitor's browser. Video and audio never leave the
 total = 0.6 · face + 0.2 · posture + 0.2 · audio      (microphone off: 0.75 · face + 0.25 · posture)
 ```
 
-Each component starts at 1.0 and is multiplied by a penalty for every active cue, for example ×0.7 for eyes closed, ×0.8 for yawning, ×0.6 for looking away and ×0.8 for slouching. The face score is smoothed over the last 30 frames. A phone in view halves the total. A score of 0.70 or more counts as *focused*, 0.40 to 0.70 as *partially attentive*, and anything lower as *distracted*.
+Each component starts at 1.0 and is multiplied by a penalty for every active cue, for example ×0.7 for eyes closed, ×0.55 while yawning (then ×0.85 for 30 s of fatigue), ×0.75 for looking away for more than 1.5 s and ×0.8 for slouching. The face score is smoothed over the last 30 frames. A phone in view halves the total. A score of 0.70 or more counts as *focused*, 0.40 to 0.70 as *partially attentive*, and anything lower as *distracted*.
 
 ## Project layout
 

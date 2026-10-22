@@ -20,7 +20,6 @@
     </div>
   </div>
   <nav>
-    <a href="#how">How it works</a>
     <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">Source on GitHub</a>
   </nav>
 </header>
@@ -109,17 +108,6 @@
     <div class="table-wrap"><table id="historyTable"></table></div>
   </section>
 
-  <section id="how" class="card how">
-    <h3>How it works</h3>
-    <div class="pipeline">
-      <div><h4>1 · Capture</h4><p>Webcam frames and (optional) microphone samples are read with <code>getUserMedia</code>. No frame leaves the browser.</p></div>
-      <div><h4>2 · Perception</h4><p>MediaPipe models run on-device (WebGL/WASM): Face Landmarker (478 points, blendshapes, 3D head pose), Pose Landmarker, Hand Landmarker and an EfficientDet-Lite object detector for phones.</p></div>
-      <div><h4>3 · Signals</h4><p>Eye aspect ratio and blink detection, PERCLOS drowsiness, yawns from mouth aspect ratio and jaw opening, head yaw/pitch/roll against a calibrated baseline, neck and shoulder angles, slouching, hand-to-face distance, fidgeting and RMS noise level.</p></div>
-      <div><h4>4 · Scoring</h4><p>Face, posture and audio scores are combined as 0.6 · face + 0.2 · posture + 0.2 · audio (the same weights as the Python version). A phone in view halves the result. Scores are smoothed over the last 30 frames.</p></div>
-      <div><h4>5 · Feedback</h4><p>If the score stays under your threshold for 5 seconds you get an alert naming the cause. Each session produces a report with a timeline, focus breakdown, event log and CSV/JSON export.</p></div>
-    </div>
-    <p class="muted small">The original desktop version (Python, OpenCV, dlib, MediaPipe, Streamlit, SQLite) is in the <code>src/</code> folder of the repository.</p>
-  </section>
 </main>
 
 <footer>Built by Vishesh Bansal · Computer vision attention monitoring · <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">GitHub</a></footer>
