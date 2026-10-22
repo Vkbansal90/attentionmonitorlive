@@ -20,7 +20,9 @@ const CFG = {
   SLOUCH_RATIO: 0.8,        // nose-to-shoulder height drops below 80% of baseline
   FIDGET_MOVE: 0.047,       // 30 px per frame at 640 px width
   FIDGET_HISTORY: 10,
-  NOISE_THRESH: 0.1,        // RMS level
+  AUDIO_CALIB_MS: 2000,     // room's quiet level is measured over the first 2 s with the mic on
+  SPEECH_MIN_DB: 5,         // speech must be this many dB above the room's quiet level
+  NOISE_MIN_DB: 10,         // non-speech sound this loud above the quiet level = noisy room
   CALIB_MS: 2000,           // neutral head/posture baseline is measured over the first 2 s
   CALIB_MIN_FRAMES: 5,
   SMOOTH_HISTORY: 30,
@@ -57,7 +59,8 @@ const SIGNALS = {
   fidget:     { label: 'Fidgeting', minMs: 1500 },
   phone:      { label: 'Phone in view', minMs: 1000 },
   multiFace:  { label: 'Multiple people', minMs: 1500 },
-  noise:      { label: 'Noisy / talking', minMs: 3000 },
+  talking:    { label: 'Talking', minMs: 2000 },
+  noise:      { label: 'Noisy room', minMs: 2500 },
 };
 const DISTRACTION_KEYS = Object.keys(SIGNALS);
 
@@ -71,6 +74,7 @@ const els = {
   total: $('totalScore'), stateLabel: $('stateLabel'), gauge: $('gaugeArc'),
   faceBar: $('faceBar'), postureBar: $('postureBar'), audioBar: $('audioBar'),
   faceVal: $('faceVal'), postureVal: $('postureVal'), audioVal: $('audioVal'), weightNote: $('weightNote'),
+  audioMeterRow: $('audioMeterRow'), audioMeter: $('audioMeter'), audioFloor: $('audioFloor'), audioState: $('audioState'),
   signals: $('signals'), trend: $('trend'),
   statBlink: $('statBlink'), statPerclos: $('statPerclos'), statYawns: $('statYawns'),
   statDistractions: $('statDistractions'), statFocus: $('statFocus'), statStreak: $('statStreak'),
@@ -81,7 +85,21 @@ const els = {
 let tasks = null;        // loaded MediaPipe tasks
 let S = null;            // current session state
 let stream = null;
-let audio = null;        // { ctx, analyser, buf, stream }
+let audio = null;        // microphone analysis state, see enableMic()
+let audioCtx = null;     // shared Web Audio context (mic analysis and alert beep)
+let tickLoaded = false;
+
+// Posts a message every 2048 samples (~20 per second). Unlike timers and
+// animation frames, the audio thread is not throttled in background tabs,
+// so the microphone keeps being analysed while the student is in another tab.
+const TICK_WORKLET = `registerProcessor('tick', class extends AudioWorkletProcessor {
+  n = 0;
+  process() {
+    this.n += 128;
+    if (this.n >= 2048) { this.n = 0; this.port.postMessage(0); }
+    return true;
+  }
+});`;
 let lastVideoTime = -1;
 let lastReport = null;
 
@@ -155,13 +173,14 @@ function newSession() {
     calib: { done: false, n: 0, yaw: 0, pitch: 0, ear: 0, neck: [], slouch: [] },
     eye: { closed: false, since: 0, blinks: [], perclos: [] },
     yawns: 0, fatigueUntil: 0, lookSince: null, blinkTotal: 0, handPrev: null, handMoves: [],
-    phoneSeenAt: -1e9, phoneBoxes: [], audioLevel: 0,
+    phoneSeenAt: -1e9, phoneBoxes: [], audioMs: { talking: 0, noisy: 0, total: 0 },
     lowSince: null, lastAlert: -1e9, streakStart: null, bestStreak: 0,
     last: null, fpsFrames: 0, fpsT: performance.now(),
   };
 }
 
 async function start() {
+  primeAudio();
   els.start.disabled = true;
   els.sample.disabled = true;
   try {
@@ -228,15 +247,62 @@ function stopStreams() {
   disableMic();
 }
 
+// Browsers only let audio start from a user gesture, so the shared context is
+// created inside the click handler, before any await.
+function primeAudio() {
+  try {
+    audioCtx ??= new AudioContext();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch { /* Web Audio unavailable */ }
+}
+
 async function enableMic() {
   if (audio) return;
   try {
-    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ctx = new AudioContext();
-    const analyser = ctx.createAnalyser();
+    // Ask for the raw signal: the browser's noise suppression and auto-gain
+    // would otherwise remove most of the sound we want to measure.
+    const micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    // If the mic is unplugged or revoked, turn the toggle off instead of
+    // silently reporting a quiet room.
+    micStream.getAudioTracks()[0].addEventListener('ended', () => {
+      disableMic();
+      els.mic.checked = false;
+      updateAudioMeter();
+    });
+    primeAudio();
+    await audioCtx.resume();
+    const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
-    ctx.createMediaStreamSource(micStream).connect(analyser);
-    audio = { ctx, analyser, buf: new Float32Array(analyser.fftSize), stream: micStream };
+    analyser.smoothingTimeConstant = 0.5;
+    const source = audioCtx.createMediaStreamSource(micStream);
+    source.connect(analyser);
+    let tick = null;
+    try {
+      if (!tickLoaded) {
+        await audioCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([TICK_WORKLET], { type: 'text/javascript' })));
+        tickLoaded = true;
+      }
+      tick = new AudioWorkletNode(audioCtx, 'tick');
+      const mute = audioCtx.createGain();
+      mute.gain.value = 0;
+      source.connect(tick).connect(mute).connect(audioCtx.destination);
+      tick.port.onmessage = () => {
+        if (!S) return;
+        analyzeAudio(performance.now());
+        updateAudioMeter();
+      };
+    } catch (err) {
+      console.warn('AudioWorklet unavailable; analysing audio once per video frame', err);
+      tick = null;
+    }
+    audio = {
+      analyser, source, tick, stream: micStream, score: 1,
+      time: new Float32Array(analyser.fftSize), freq: new Float32Array(analyser.frequencyBinCount),
+      startedAt: performance.now(), calib: [], floor: null, level: -100, above: 0,
+      voiced: [], talking: false, noisy: false, state: 'calibrating',
+    };
   } catch (err) {
     console.warn('Microphone unavailable', err);
     els.mic.checked = false;
@@ -246,8 +312,9 @@ async function enableMic() {
 
 function disableMic() {
   if (!audio) return;
+  audio.source.disconnect();
+  audio.tick?.disconnect();
   audio.stream.getTracks().forEach(t => t.stop());
-  audio.ctx.close();
   audio = null;
   updateWeightNote();
 }
@@ -306,7 +373,7 @@ function processFrame(now) {
   if (!c.done && now - S.t0 >= CFG.CALIB_MS && c.n >= CFG.CALIB_MIN_FRAMES) c.done = true;
   const face = analyzeFace(faceRes, handRes, w, h, now);
   const posture = analyzePosture(S.poseRes, handRes, w, h);
-  const audioScore = analyzeAudio();
+  const audioScore = !audio ? 1 : audio.tick ? audio.score : analyzeAudio(now);
   const calibrating = !c.done;
 
   const W = audio ? CFG.WEIGHTS : CFG.WEIGHTS_NO_MIC;
@@ -319,7 +386,8 @@ function processFrame(now) {
     lookAway: face.lookAway, eyesClosed: face.eyesClosed, yawn: face.yawn,
     headTilt: face.headTilt, handFace: face.handNear, multiFace: face.count > 1,
     slouch: posture.slouch, fidget: posture.fidget, phone,
-    noise: !!audio && S.audioLevel > CFG.NOISE_THRESH,
+    talking: !!audio && audio.talking,
+    noise: !!audio && audio.noisy,
   };
   if (!calibrating) trackEvents(flags, now);
   S.current = flags;
@@ -481,16 +549,64 @@ function analyzePosture(res, handRes, w, h) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio: RMS noise level, as in AudioAnalyzer.calculate_noise_level
+// Audio: loudness relative to the room's calibrated quiet level, and talking
+// vs. noise from the spectrum (extends AudioAnalyzer.calculate_noise_level).
 // ---------------------------------------------------------------------------
-function analyzeAudio() {
+function analyzeAudio(now) {
   if (!audio) return 1;
-  audio.analyser.getFloatTimeDomainData(audio.buf);
+  const a = audio;
+  a.analyser.getFloatTimeDomainData(a.time);
   let sum = 0;
-  for (const x of audio.buf) sum += x * x;
-  const rms = Math.sqrt(sum / audio.buf.length);
-  S.audioLevel = 0.8 * S.audioLevel + 0.2 * rms;
-  return S.audioLevel > CFG.NOISE_THRESH ? 1 - Math.min(S.audioLevel, 0.5) : 1;
+  for (const x of a.time) sum += x * x;
+  const db = 10 * Math.log10(sum / a.time.length + 1e-12);  // dBFS
+  a.level = 0.7 * a.level + 0.3 * db;
+
+  if (now - a.startedAt < CFG.AUDIO_CALIB_MS) {
+    a.calib.push(db);
+    a.state = 'calibrating';
+    return (a.score = 1);
+  }
+  if (a.floor == null) a.floor = percentile(a.calib, 0.3) ?? db;
+  // Follow the room down quickly. Rise only slowly (3 dB/min) and only while
+  // the room is near-quiet, so talking or noise never becomes the new normal.
+  const dt = Math.min(now - (a.lastT ?? now), 250) / 1000;
+  a.lastT = now;
+  if (db < a.floor) a.floor = 0.9 * a.floor + 0.1 * db;
+  else if (!a.talking && db - a.floor < CFG.SPEECH_MIN_DB) a.floor += 0.05 * dt;
+  a.above = a.level - a.floor;
+
+  // Speech puts most of its energy in the 300-3400 Hz voice band and has a
+  // harmonic (peaky) spectrum; fans and traffic are broadband and flat.
+  a.analyser.getFloatFrequencyData(a.freq);
+  const hz = audioCtx.sampleRate / a.analyser.fftSize;
+  let voice = 0, total = 0, logSum = 0, n = 0;
+  const hi = Math.min(a.freq.length, Math.floor(8000 / hz));
+  for (let i = Math.ceil(80 / hz); i < hi; i++) {
+    const p = 10 ** (a.freq[i] / 10);
+    total += p;
+    if (i * hz >= 300 && i * hz <= 3400) { voice += p; logSum += Math.log(p + 1e-20); n++; }
+  }
+  const voiceRatio = total ? voice / total : 0;
+  const flatness = n && voice ? Math.exp(logSum / n) / (voice / n) : 1;
+  // Use the instantaneous level here: syllable peaks matter, not the smoothed average.
+  const voiced = db - a.floor > CFG.SPEECH_MIN_DB && voiceRatio > 0.55 && flatness < 0.3;
+
+  // Speech has pauses, so call it talking when enough of the last 1.5 s was voiced.
+  a.voiced.push([now, voiced]);
+  while (now - a.voiced[0][0] > 1500) a.voiced.shift();
+  a.talking = a.voiced.filter(v => v[1]).length / a.voiced.length > 0.35;
+  a.noisy = !a.talking && a.above > CFG.NOISE_MIN_DB;
+  a.state = a.talking ? 'talking' : a.noisy ? 'noisy' : 'quiet';
+  if (S) {
+    S.audioMs.total += dt * 1000;
+    if (a.talking) S.audioMs.talking += dt * 1000;
+    if (a.noisy) S.audioMs.noisy += dt * 1000;
+  }
+
+  a.score = a.talking ? 0.4
+    : a.noisy ? 1 - Math.min(0.5, 0.2 + (a.above - CFG.NOISE_MIN_DB) / 40)
+    : 1;
+  return a.score;
 }
 
 // ---------------------------------------------------------------------------
@@ -530,7 +646,8 @@ function checkAlert(total, now, flags) {
 
 function beep() {
   try {
-    const ctx = new AudioContext();
+    primeAudio();
+    const ctx = audioCtx;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = 880;
@@ -540,7 +657,6 @@ function beep() {
     osc.connect(gain).connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.4);
-    osc.onended = () => ctx.close();
   } catch { /* audio not available */ }
 }
 
@@ -595,6 +711,7 @@ function updatePanel(now) {
   setBar(els.faceBar, els.faceVal, L.face);
   setBar(els.postureBar, els.postureVal, L.posture);
   setBar(els.audioBar, els.audioVal, audio ? L.audio : null);
+  updateAudioMeter();
   for (const k of DISTRACTION_KEYS) {
     const el = document.getElementById(`sig-${k}`);
     el.classList.toggle('on', !!S.current[k]);
@@ -630,6 +747,26 @@ function setBar(bar, val, v) {
   bar.style.width = `${Math.round((v ?? 0) * 100)}%`;
   bar.style.background = v == null ? 'var(--surface-2)' : STATE_COLOR[stateOf(v)];
   val.textContent = v == null ? 'off' : v.toFixed(2);
+}
+
+const AUDIO_STATE_LABEL = { calibrating: 'Measuring room…', quiet: 'Quiet', talking: 'Talking', noisy: 'Noisy room' };
+const dbToPct = db => clamp01((db + 90) / 80) * 100;  // -90 to -10 dBFS
+
+function updateAudioMeter() {
+  els.audioMeterRow.classList.toggle('off', !audio);
+  if (!audio) {
+    els.audioMeter.style.width = '0%';
+    els.audioFloor.style.display = 'none';
+    els.audioState.textContent = 'Mic off: turn on Microphone to detect talking and noise';
+    return;
+  }
+  els.audioMeter.style.width = `${dbToPct(audio.level)}%`;
+  els.audioMeter.className = audio.state;
+  els.audioFloor.style.display = audio.floor == null ? 'none' : '';
+  if (audio.floor != null) els.audioFloor.style.left = `${dbToPct(audio.floor)}%`;
+  els.audioState.textContent = audio.state === 'calibrating'
+    ? AUDIO_STATE_LABEL.calibrating
+    : `${AUDIO_STATE_LABEL[audio.state]} · ${Math.max(0, Math.round(audio.above))} dB above room`;
 }
 
 const STATE_LABEL = { focused: 'Focused', partial: 'Partially attentive', distracted: 'Distracted' };
@@ -734,6 +871,10 @@ function buildReport(session, sample = false) {
       distracted: session.stateMs.distracted / totalMs,
     },
     bestStreak: session.bestStreak / 1000,
+    audioPct: session.audioMs.total ? {
+      talking: session.audioMs.talking / session.audioMs.total,
+      noisy: session.audioMs.noisy / session.audioMs.total,
+    } : null,
     blinkRate: duration > 0 ? session.blinkTotal * 60 / duration : 0,
     yawns: session.yawns,
     events: session.events,
@@ -762,6 +903,10 @@ function showReport(r) {
     ['Blinks / min', Math.round(r.blinkRate)],
     ['Peak / lowest', `${r.max.toFixed(2)} / ${r.min.toFixed(2)}`],
   ];
+  if (r.audioPct) {
+    tiles.push(['Time talking', `${Math.round(r.audioPct.talking * 100)}%`]);
+    tiles.push(['Time in noise', `${Math.round(r.audioPct.noisy * 100)}%`]);
+  }
   $('reportTiles').innerHTML = tiles.map(([k, v, cls]) => `<div class="tile ${cls ?? ''}"><b>${v}</b><span>${k}</span></div>`).join('');
   $('stateBar').innerHTML = ['focused', 'partial', 'distracted'].map(s => {
     const pct = Math.round(r.statePct[s] * 100);
@@ -838,7 +983,7 @@ function sampleSession() {
   s.startedAt = Date.now() - 12 * 60 * 1000;
   const episodes = [
     [95, 12, 'lookAway'], [180, 6, 'handFace'], [260, 25, 'phone'], [340, 4, 'yawn'], [400, 9, 'slouch'],
-    [470, 5, 'eyesClosed'], [520, 4, 'yawn'], [585, 30, 'noFace'], [650, 8, 'lookAway'], [690, 6, 'noise'],
+    [470, 5, 'eyesClosed'], [520, 4, 'yawn'], [585, 30, 'noFace'], [650, 8, 'lookAway'], [690, 6, 'noise'], [300, 7, 'talking'],
   ];
   let seed = 7;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -847,12 +992,15 @@ function sampleSession() {
     const ep = episodes.find(([st, d]) => t >= st && t < st + d);
     const fatigue = t > 420 ? 0.08 : 0;
     let target = 0.86 - fatigue + (rnd() - 0.5) * 0.12;
-    if (ep) target = { phone: 0.3, noFace: 0, lookAway: 0.38, eyesClosed: 0.35, yawn: 0.55, slouch: 0.62, handFace: 0.5, noise: 0.6 }[ep[2]];
+    if (ep) target = { phone: 0.3, noFace: 0, lookAway: 0.38, eyesClosed: 0.35, yawn: 0.55, slouch: 0.62, handFace: 0.5, noise: 0.6, talking: 0.55 }[ep[2]];
     prev = 0.6 * prev + 0.4 * target;
     const total = clamp01(prev);
     const face = clamp01(total + (rnd() - 0.5) * 0.08);
     const posture = clamp01(ep?.[2] === 'slouch' ? 0.6 : 0.9 + (rnd() - 0.5) * 0.1);
-    s.samples.push({ t, total, face, posture, audio: ep?.[2] === 'noise' ? 0.75 : 1 });
+    s.samples.push({ t, total, face, posture, audio: ep?.[2] === 'noise' ? 0.6 : ep?.[2] === 'talking' ? 0.4 : 1 });
+    s.audioMs.total += 1000;
+    if (ep?.[2] === 'talking') s.audioMs.talking += 1000;
+    if (ep?.[2] === 'noise') s.audioMs.noisy += 1000;
     s.stateMs[stateOf(total)] += 1000;
   }
   for (const [st, , key] of episodes) {
@@ -888,6 +1036,11 @@ function angle(a, b, c) {
   return deg > 180 ? 360 - deg : deg;
 }
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+function percentile(arr, q) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+}
 const mean = a => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 const clamp01 = v => Math.max(0, Math.min(1, v));
 function pushHist(arr, v) { arr.push(v); if (arr.length > CFG.SMOOTH_HISTORY) arr.shift(); }
@@ -912,12 +1065,18 @@ updateWeightNote();
 setBar(els.faceBar, els.faceVal, null);
 setBar(els.postureBar, els.postureVal, null);
 setBar(els.audioBar, els.audioVal, null);
+updateAudioMeter();
 drawChart(els.trend, [], { window: 120, now: 120 });
 
 els.start.addEventListener('click', start);
 els.stop.addEventListener('click', stop);
 els.sample.addEventListener('click', () => showReport(buildReport(sampleSession(), true)));
-els.mic.addEventListener('change', () => { if (!S) return; els.mic.checked ? enableMic() : disableMic(); });
+els.mic.addEventListener('change', async () => {
+  if (els.mic.checked) primeAudio();
+  if (!S) return;
+  await (els.mic.checked ? enableMic() : disableMic());
+  updateAudioMeter();
+});
 els.phone.addEventListener('change', () => { if (els.phone.checked && tasks?.fileset) loadPhoneDetector(); });
 els.thr.addEventListener('input', () => { els.thrOut.textContent = Number(els.thr.value).toFixed(2); });
 els.clearHistory.addEventListener('click', () => {

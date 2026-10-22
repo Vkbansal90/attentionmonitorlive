@@ -87,12 +87,12 @@ button.link:hover { color: var(--text); }
 button.icon { background: var(--surface-2); color: var(--text); padding: 6px 11px; }
 
 .hud {
-  position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; align-items: center; pointer-events: none;
+  position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; pointer-events: none;
 }
 .hud-right { margin-left: auto; display: flex; gap: 8px; }
 .hud-right span, .chip {
   background: rgba(5, 8, 17, .72); backdrop-filter: blur(6px); border: 1px solid var(--border);
-  border-radius: 999px; padding: 3px 11px; font-size: 13px; font-variant-numeric: tabular-nums;
+  border-radius: 999px; padding: 3px 11px; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 #fps:empty { display: none; }
 .chip.focused { border-color: var(--good); color: #bbf7d0; }
@@ -129,6 +129,15 @@ button.icon { background: var(--surface-2); color: var(--text); padding: 6px 11p
 .bar { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
 .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .25s, background .25s; }
 .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.audio-meter { margin: 2px 0 4px; }
+.audio-meter .meter { position: relative; height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.audio-meter .meter i { display: block; height: 100%; width: 0; background: var(--good); transition: width .1s linear; }
+.audio-meter .meter i.talking { background: var(--warn); }
+.audio-meter .meter i.noisy { background: var(--bad); }
+.audio-meter .meter i.calibrating { background: var(--accent); }
+.audio-meter .meter b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); opacity: .7; }
+.audio-meter span { display: block; font-size: 12px; color: var(--muted); margin-top: 5px; }
+.audio-meter.off .meter { opacity: .4; }
 
 .signals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .sig {

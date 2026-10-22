@@ -50,7 +50,7 @@
     </div>
     <div class="controls">
       <button id="stopBtn" class="danger" disabled>Stop &amp; view report</button>
-      <label class="toggle"><input type="checkbox" id="micToggle"><span>Microphone</span></label>
+      <label class="toggle"><input type="checkbox" id="micToggle"><span>Microphone (talking &amp; noise)</span></label>
       <label class="toggle"><input type="checkbox" id="phoneToggle" checked><span>Phone detection</span></label>
       <label class="toggle"><input type="checkbox" id="soundToggle" checked><span>Alert sound</span></label>
       <label class="toggle"><input type="checkbox" id="overlayToggle" checked><span>Landmarks</span></label>
@@ -76,6 +76,10 @@
       <div class="bar-row"><span>Face <em>60%</em></span><div class="bar"><i id="faceBar"></i></div><b id="faceVal">–</b></div>
       <div class="bar-row"><span>Posture <em>20%</em></span><div class="bar"><i id="postureBar"></i></div><b id="postureVal">–</b></div>
       <div class="bar-row"><span>Audio <em>20%</em></span><div class="bar"><i id="audioBar"></i></div><b id="audioVal">–</b></div>
+      <div class="audio-meter off" id="audioMeterRow">
+        <div class="meter" title="Microphone level; the marker is the room's quiet level"><i id="audioMeter"></i><b id="audioFloor"></b></div>
+        <span id="audioState"></span>
+      </div>
       <p class="note" id="weightNote">Microphone off: face 75%, posture 25%.</p>
     </div>
 
