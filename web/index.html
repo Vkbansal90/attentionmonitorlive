@@ -20,7 +20,6 @@
     </div>
   </div>
   <nav>
-    <a href="#how">How it works</a>
     <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">Source on GitHub</a>
   </nav>
 </header>
@@ -51,7 +50,7 @@
     </div>
     <div class="controls">
       <button id="stopBtn" class="danger" disabled>Stop &amp; view report</button>
-      <label class="toggle"><input type="checkbox" id="micToggle"><span>Microphone</span></label>
+      <label class="toggle"><input type="checkbox" id="micToggle"><span>Microphone (talking &amp; noise)</span></label>
       <label class="toggle"><input type="checkbox" id="phoneToggle" checked><span>Phone detection</span></label>
       <label class="toggle"><input type="checkbox" id="soundToggle" checked><span>Alert sound</span></label>
       <label class="toggle"><input type="checkbox" id="overlayToggle" checked><span>Landmarks</span></label>
@@ -77,6 +76,10 @@
       <div class="bar-row"><span>Face <em>60%</em></span><div class="bar"><i id="faceBar"></i></div><b id="faceVal">–</b></div>
       <div class="bar-row"><span>Posture <em>20%</em></span><div class="bar"><i id="postureBar"></i></div><b id="postureVal">–</b></div>
       <div class="bar-row"><span>Audio <em>20%</em></span><div class="bar"><i id="audioBar"></i></div><b id="audioVal">–</b></div>
+      <div class="audio-meter off" id="audioMeterRow">
+        <div class="meter" title="Microphone level; the marker is the room's quiet level"><i id="audioMeter"></i><b id="audioFloor"></b></div>
+        <span id="audioState"></span>
+      </div>
       <p class="note" id="weightNote">Microphone off: face 75%, posture 25%.</p>
     </div>
 
@@ -109,17 +112,6 @@
     <div class="table-wrap"><table id="historyTable"></table></div>
   </section>
 
-  <section id="how" class="card how">
-    <h3>How it works</h3>
-    <div class="pipeline">
-      <div><h4>1 · Capture</h4><p>Webcam frames and (optional) microphone samples are read with <code>getUserMedia</code>. No frame leaves the browser.</p></div>
-      <div><h4>2 · Perception</h4><p>MediaPipe models run on-device (WebGL/WASM): Face Landmarker (478 points, blendshapes, 3D head pose), Pose Landmarker, Hand Landmarker and an EfficientDet-Lite object detector for phones.</p></div>
-      <div><h4>3 · Signals</h4><p>Eye aspect ratio and blink detection, PERCLOS drowsiness, yawns from mouth aspect ratio and jaw opening, head yaw/pitch/roll against a calibrated baseline, neck and shoulder angles, slouching, hand-to-face distance, fidgeting and RMS noise level.</p></div>
-      <div><h4>4 · Scoring</h4><p>Face, posture and audio scores are combined as 0.6 · face + 0.2 · posture + 0.2 · audio (the same weights as the Python version). A phone in view halves the result. Scores are smoothed over the last 30 frames.</p></div>
-      <div><h4>5 · Feedback</h4><p>If the score stays under your threshold for 5 seconds you get an alert naming the cause. Each session produces a report with a timeline, focus breakdown, event log and CSV/JSON export.</p></div>
-    </div>
-    <p class="muted small">The original desktop version (Python, OpenCV, dlib, MediaPipe, Streamlit, SQLite) is in the <code>src/</code> folder of the repository.</p>
-  </section>
 </main>
 
 <footer>Built by Vishesh Bansal · Computer vision attention monitoring · <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">GitHub</a></footer>

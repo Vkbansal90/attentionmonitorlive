@@ -17,7 +17,7 @@ The demo runs entirely in the visitor's browser. Video and audio never leave the
 | **Hands** | Hand-on-face distance and fidgeting (rapid fingertip movement) |
 | **Phone detection** | EfficientDet-Lite object detector restricted to the COCO `cell phone` class |
 | **Multiple people** | Flags when more than one face is in frame |
-| **Audio** | RMS noise level from the microphone (optional) |
+| **Audio** | Optional microphone. Calibrates the room's quiet level, then tells **talking** (energy in the 300–3400 Hz voice band with a harmonic spectrum) apart from **background noise** (broadband, flat spectrum). Runs on the audio thread, so it keeps working while the student is in another tab |
 | **Alerts** | Banner and sound when the score stays under a user-set threshold for 5 s, naming the cause |
 | **Session report** | Focus grade, average and peak score, time focused, longest focus streak, timeline with event markers, state breakdown, event log, CSV / JSON export |
 | **History** | Past sessions are kept in the browser (web) or in SQLite with CSV export (desktop) |
@@ -28,7 +28,7 @@ The demo runs entirely in the visitor's browser. Video and audio never leave the
 total = 0.6 · face + 0.2 · posture + 0.2 · audio      (microphone off: 0.75 · face + 0.25 · posture)
 ```
 
-Each component starts at 1.0 and is multiplied by a penalty for every active cue, for example ×0.7 for eyes closed, ×0.8 for yawning, ×0.6 for looking away and ×0.8 for slouching. The face score is smoothed over the last 30 frames. A phone in view halves the total. A score of 0.70 or more counts as *focused*, 0.40 to 0.70 as *partially attentive*, and anything lower as *distracted*.
+Each component starts at 1.0 and is multiplied by a penalty for every active cue, for example ×0.7 for eyes closed, ×0.55 while yawning (then ×0.85 for 30 s of fatigue), ×0.75 for looking away for more than 1.5 s and ×0.8 for slouching. The audio score is 0.4 while talking and 0.5–0.8 in a noisy room, depending on loudness. The face score is smoothed over the last 30 frames. A phone in view halves the total. A score of 0.70 or more counts as *focused*, 0.40 to 0.70 as *partially attentive*, and anything lower as *distracted*.
 
 ## Project layout
 
