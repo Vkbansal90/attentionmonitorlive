@@ -106,13 +106,37 @@ let lastReport = null;
 // ---------------------------------------------------------------------------
 // Model loading
 // ---------------------------------------------------------------------------
-async function createTask(Cls, options) {
-  try {
-    return await Cls.createFromOptions(tasks.fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'GPU' } });
-  } catch (err) {
-    console.warn(`${Cls.name}: GPU delegate failed, using CPU`, err);
-    return Cls.createFromOptions(tasks.fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'CPU' } });
+// MediaPipe's loader calls ModuleFactory(self.Module || defaults), so a global
+// `Module` defined by a browser extension (often a strict-mode function) gets
+// used as the WASM config and loading fails with a 'caller'/'callee' TypeError.
+// Hide it while tasks are created and put it back afterwards.
+let moduleGuardDepth = 0;
+let foreignModule;
+
+async function withoutGlobalModule(fn) {
+  if (moduleGuardDepth++ === 0) {
+    foreignModule = self.Module;
+    if (foreignModule !== undefined) self.Module = undefined;
   }
+  try {
+    return await fn();
+  } finally {
+    if (--moduleGuardDepth === 0 && foreignModule !== undefined) {
+      self.Module = foreignModule;
+      foreignModule = undefined;
+    }
+  }
+}
+
+async function createTask(Cls, options) {
+  return withoutGlobalModule(async () => {
+    try {
+      return await Cls.createFromOptions(tasks.fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'GPU' } });
+    } catch (err) {
+      console.warn(`${Cls.name}: GPU delegate failed, using CPU`, err);
+      return Cls.createFromOptions(tasks.fileset, { ...options, baseOptions: { ...options.baseOptions, delegate: 'CPU' } });
+    }
+  });
 }
 
 async function loadModels() {
