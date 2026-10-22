@@ -1,11 +1,12 @@
 import os
 import sys
+import streamlit as st
 from setup_models import setup_models
 
 # Ensure model files are present
 if not setup_models():
     st.error("Failed to set up required model files. Please check the console for errors.")
-    sys.exit(1)
+    st.stop()
 
 # Set TensorFlow environment variables to suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 0=all, 1=info, 2=warning, 3=error
@@ -193,6 +194,31 @@ def draw_debug_info(frame, landmarks, attention_score, ear, pitch, yaw, visibili
     cv2.putText(frame, f"Face Visibility: {visibility:.2f}", (10, 120),
                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+def show_history(container):
+    """Summarise logged scores and offer them as a CSV download"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(os.path.dirname(current_dir), 'data', 'attention_logs.db')
+    conn = utils.init_database(db_path)
+    try:
+        container.markdown("---")
+        container.subheader("History")
+        hours = container.selectbox("Period", [1, 24, 24 * 7], index=1,
+                                    format_func=lambda h: {1: "Last hour", 24: "Last 24 hours", 168: "Last 7 days"}[h])
+        df = utils.get_attention_history(conn, hours=hours)
+        if df.empty:
+            container.caption("No logged scores in this period.")
+            return
+        stats = utils.calculate_attention_statistics(df)
+        container.metric("Average attention", f"{stats['average_attention']:.2f}")
+        container.caption(
+            f"Min {stats['min_attention']:.2f} · Max {stats['max_attention']:.2f} · "
+            f"{stats['low_attention_periods']} low readings (< 0.5) of {len(df)}"
+        )
+        container.download_button("Download CSV", df.to_csv(index=False).encode('utf-8'),
+                                   file_name="attention_history.csv", mime="text/csv")
+    finally:
+        conn.close()
+
 def main():
     st.title("Student Attention Monitoring System")
     
@@ -213,6 +239,9 @@ def main():
     
     # Add button to show session report
     show_report = st.sidebar.button("Show Session Report")
+
+    # Session history from the SQLite log
+    show_history(st.sidebar)
     
     # Main content layout
     col1, col2 = st.columns([2, 1])

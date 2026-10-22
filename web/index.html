@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention Monitor Live</title>
+<meta name="description" content="Real-time student attention monitoring in the browser: eyes, gaze, drowsiness, posture, phone use and ambient noise, with session analytics.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%2338bdf8' stroke-width='4'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%2338bdf8'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="3.5"/><circle cx="16" cy="16" r="5.5" fill="currentColor"/></svg>
+    <div>
+      <h1>Attention Monitor Live</h1>
+      <p>Real-time attention analytics from webcam and microphone, computed entirely in your browser</p>
+    </div>
+  </div>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">Source on GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="video-wrap" id="videoWrap">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="placeholder" class="placeholder">
+        <h2>Start a monitoring session</h2>
+        <p>Sit facing the camera with your head and shoulders in view. The first 2 seconds calibrate your neutral posture and head position.</p>
+        <p class="privacy">🔒 Video and audio are analysed on this device. Nothing is uploaded or recorded.</p>
+        <div class="actions">
+          <button id="startBtn" class="primary">Start monitoring</button>
+          <button id="sampleBtn" class="ghost">View a sample report</button>
+        </div>
+        <p id="loadStatus" class="status"></p>
+      </div>
+      <div id="alertBanner" class="alert hidden" role="alert">
+        <strong>Attention dropped</strong><span id="alertReason"></span>
+      </div>
+      <div class="hud">
+        <span id="stateChip" class="chip">Idle</span>
+        <span id="calibChip" class="chip hidden">Calibrating…</span>
+        <span class="hud-right"><span id="timer">00:00</span><span id="fps"></span></span>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="stopBtn" class="danger" disabled>Stop &amp; view report</button>
+      <label class="toggle"><input type="checkbox" id="micToggle"><span>Microphone</span></label>
+      <label class="toggle"><input type="checkbox" id="phoneToggle" checked><span>Phone detection</span></label>
+      <label class="toggle"><input type="checkbox" id="soundToggle" checked><span>Alert sound</span></label>
+      <label class="toggle"><input type="checkbox" id="overlayToggle" checked><span>Landmarks</span></label>
+      <label class="range">Alert when score stays below <output id="thrOut">0.50</output>
+        <input type="range" id="thr" min="0.2" max="0.8" step="0.05" value="0.5"></label>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="card score-card">
+      <svg viewBox="0 0 120 120" class="gauge" aria-hidden="true">
+        <circle cx="60" cy="60" r="50" class="gauge-bg"/>
+        <circle cx="60" cy="60" r="50" class="gauge-fg" id="gaugeArc"/>
+      </svg>
+      <div class="score-text">
+        <div id="totalScore" class="score-num">–</div>
+        <div id="stateLabel" class="score-label">Not running</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Score components</h3>
+      <div class="bar-row"><span>Face <em>60%</em></span><div class="bar"><i id="faceBar"></i></div><b id="faceVal">–</b></div>
+      <div class="bar-row"><span>Posture <em>20%</em></span><div class="bar"><i id="postureBar"></i></div><b id="postureVal">–</b></div>
+      <div class="bar-row"><span>Audio <em>20%</em></span><div class="bar"><i id="audioBar"></i></div><b id="audioVal">–</b></div>
+      <p class="note" id="weightNote">Microphone off: face 75%, posture 25%.</p>
+    </div>
+
+    <div class="card">
+      <h3>Live signals</h3>
+      <div class="signals" id="signals"></div>
+    </div>
+
+    <div class="card">
+      <h3>Session stats</h3>
+      <div class="stats">
+        <div><b id="statBlink">–</b><span>blinks / min</span></div>
+        <div><b id="statPerclos">–</b><span>PERCLOS (eyes-closed %)</span></div>
+        <div><b id="statYawns">0</b><span>yawns</span></div>
+        <div><b id="statDistractions">0</b><span>distraction events</span></div>
+        <div><b id="statFocus">–</b><span>time focused</span></div>
+        <div><b id="statStreak">–</b><span>longest focus streak</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="card trend">
+    <div class="card-head"><h3>Attention trend</h3><span class="muted">last 2 minutes · dashed line = alert threshold</span></div>
+    <canvas id="trend"></canvas>
+  </section>
+
+  <section class="card history">
+    <div class="card-head"><h3>Session history</h3><button id="clearHistory" class="link">Clear</button></div>
+    <p class="muted small">Saved only in this browser.</p>
+    <div class="table-wrap"><table id="historyTable"></table></div>
+  </section>
+
+  <section id="how" class="card how">
+    <h3>How it works</h3>
+    <div class="pipeline">
+      <div><h4>1 · Capture</h4><p>Webcam frames and (optional) microphone samples are read with <code>getUserMedia</code>. No frame leaves the browser.</p></div>
+      <div><h4>2 · Perception</h4><p>MediaPipe models run on-device (WebGL/WASM): Face Landmarker (478 points, blendshapes, 3D head pose), Pose Landmarker, Hand Landmarker and an EfficientDet-Lite object detector for phones.</p></div>
+      <div><h4>3 · Signals</h4><p>Eye aspect ratio and blink detection, PERCLOS drowsiness, yawns from mouth aspect ratio and jaw opening, head yaw/pitch/roll against a calibrated baseline, neck and shoulder angles, slouching, hand-to-face distance, fidgeting and RMS noise level.</p></div>
+      <div><h4>4 · Scoring</h4><p>Face, posture and audio scores are combined as 0.6 · face + 0.2 · posture + 0.2 · audio (the same weights as the Python version). A phone in view halves the result. Scores are smoothed over the last 30 frames.</p></div>
+      <div><h4>5 · Feedback</h4><p>If the score stays under your threshold for 5 seconds you get an alert naming the cause. Each session produces a report with a timeline, focus breakdown, event log and CSV/JSON export.</p></div>
+    </div>
+    <p class="muted small">The original desktop version (Python, OpenCV, dlib, MediaPipe, Streamlit, SQLite) is in the <code>src/</code> folder of the repository.</p>
+  </section>
+</main>
+
+<footer>Built by Vishesh Bansal · Computer vision attention monitoring · <a href="https://github.com/Vkbansal90/attentionmonitorlive" target="_blank" rel="noopener">GitHub</a></footer>
+
+<dialog id="report">
+  <div class="report-head">
+    <div><h2>Session report</h2><p id="reportMeta" class="muted"></p></div>
+    <button id="closeReport" class="icon" aria-label="Close">✕</button>
+  </div>
+  <div id="sampleNote" class="sample-note hidden">This report was generated from simulated data so you can see the output without a camera.</div>
+  <div class="tiles" id="reportTiles"></div>
+  <h3>Attention timeline</h3>
+  <canvas id="reportChart"></canvas>
+  <div class="legend"><span class="lg focused"></span>Focused ≥ 0.70 <span class="lg partial"></span>Partial 0.40–0.70 <span class="lg distracted"></span>Distracted &lt; 0.40 <span class="lg event"></span>Event</div>
+  <h3>Time in each state</h3>
+  <div class="statebar" id="stateBar"></div>
+  <div class="report-cols">
+    <div><h3>Distraction breakdown</h3><ul id="eventCounts" class="counts"></ul></div>
+    <div><h3>Event log</h3><ol id="eventLog" class="log"></ol></div>
+  </div>
+  <div class="report-actions">
+    <button id="dlCsv" class="ghost">Download CSV</button>
+    <button id="dlJson" class="ghost">Download JSON</button>
+    <button id="closeReport2" class="primary">Done</button>
+  </div>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
